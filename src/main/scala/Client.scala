@@ -1,31 +1,39 @@
-import scalaz.stream._
-import scalaz.stream.Process._
-import scalaz.netty._
+import java.net.InetSocketAddress
+import java.nio.channels.AsynchronousChannelGroup
+import java.util.concurrent.{ExecutorService, Executors}
+
+import fs2.{Strategy, Stream, Task, io, text}
+import fs2.io.tcp
 
 object Client {
 
-  val mainProcess = for {
+  def address = new InetSocketAddress("localhost", 9090)
+
+  val pool: ExecutorService = Executors.newFixedThreadPool(4)
+  implicit val S: Strategy = Strategy.fromExecutor(pool)
+  implicit val acg: AsynchronousChannelGroup = AsynchronousChannelGroup.withThreadPool(pool)
+
+  val mainProcess: Stream[Task, Unit] = for {
     // Get the user's nick
-    _ <- emit("** Enter your nick: **") to io.stdOutLines
-    nick <- io.stdInLines.take(1)
+    _ <- Stream.emit("** Enter your nick: **").covary[Task] through text.utf8Encode to io.stdout
+    nick <- io.stdin[Task](64) through text.utf8Decode take 1
 
     // Connect to the server
-    c <- Netty connect Server.address
-    Exchange(src, snk) = c
-    _ <- emit(s"** Connected as $nick **") to io.stdOutLines
+    c <- tcp.client[Task](address)
+    _ <- Stream.emit(s"** Connected as $nick **").covary[Task] through text.utf8Encode to io.stdout
 
     // Reads UTF8 bytes from the connection, decodes them, and sends to stdout
-    in = src pipe text.utf8Decode to io.stdOutLines
+    in = c.reads(256) through text.utf8Decode through text.utf8Encode to io.stdout
 
     // Reads from stdin, prepends the nick, encodes as UTF8, and sends to the server
-    out = io.stdInLines.map(msg => s"$nick: $msg") pipe text.utf8Encode to snk
+    out = io.stdin[Task](64).map(msg => s"$nick: $msg") through text.utf8Encode to c.writes()
 
     // The main process nondeterministically merges the in and out processes
-    _ <- (in wye out)(wye.mergeHaltBoth)
+    _ <- in mergeHaltBoth out
   } yield ()
 
   val mainTask = mainProcess.run
 
-  def main(args: Array[String]): Unit = mainTask.run
+  def main(args: Array[String]): Unit = mainTask.unsafeRun
 }
 

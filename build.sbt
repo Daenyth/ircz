@@ -1,5 +1,8 @@
-resolvers += "RichRelevance Bintray" at "http://dl.bintray.com/rr/releases"
 
-libraryDependencies += "org.scalaz.netty" %% "scalaz-netty" % "0.2"
+// available for Scala 2.11.8, 2.12.0
+libraryDependencies += "co.fs2" %% "fs2-core" % "0.9.5"
 
-scalaVersion := "2.11.7"
+// optional I/O library
+libraryDependencies += "co.fs2" %% "fs2-io" % "0.9.5"
+
+scalaVersion := "2.12.2"
