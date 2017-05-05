@@ -6,18 +6,21 @@ import fs2.async.mutable.{Queue, Signal}
 import fs2.io.tcp
 import fs2.io.tcp.Socket
 import fs2.util.Async
-import fs2.{Sink, Strategy, Stream, Task, async}
+import fs2.{Pipe, Sink, Strategy, Stream, Task, async}
 
 import scala.concurrent.duration._
 
 object Server {
   val maxThreads = 16
+  val tcpThreads = 8
 
-  def address = new InetSocketAddress("localhost", 9090)
+  def address = new InetSocketAddress("127.0.0.1", 9090)
 
-  val pool: ExecutorService = Executors.newFixedThreadPool(maxThreads)
-  implicit val S: Strategy = Strategy.fromExecutor(pool)
-  implicit val acg: AsynchronousChannelGroup = AsynchronousChannelGroup.withThreadPool(pool)
+  val streamPool: ExecutorService = Executors.newFixedThreadPool(maxThreads)
+  implicit val S: Strategy = Strategy.fromExecutor(streamPool)
+  implicit val acg: AsynchronousChannelGroup =
+    AsynchronousChannelGroup.withThreadPool(
+      Executors.newFixedThreadPool(tcpThreads))
 
   type Listener = Sink[Task, Byte]
 
@@ -69,7 +72,7 @@ object Server {
   def relay(messageQueue: Queue[Task, Byte],
             clients: Signal[Task, Set[Listener]]): Stream[Task, Unit] =
     for {
-      message <- messageQueue.dequeue
+      message <- messageQueue.dequeue.through(log("relay"))
       cs <- Stream.eval(clients.get)
       client <- Stream.emits(cs.toSeq)
       _ <- Stream.emit(message) to client
@@ -85,7 +88,13 @@ object Server {
     for {
       mq <- messageQueueT
       clientSignal <- clientsT
-    } yield mainStream(mq, clientSignal).run
+      stream <- mainStream(mq, clientSignal).run
+    } yield stream
+
+  def log[A](prefix: String): Pipe[Task, A, A] =
+    _.evalMap { a =>
+      Task.delay { println(s"$prefix> $a"); a }
+    }
 
   def main(args: Array[String]): Unit = mainTask.unsafeRun
 }
